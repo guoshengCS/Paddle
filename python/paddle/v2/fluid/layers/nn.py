@@ -65,6 +65,7 @@ __all__ = [
     'beam_search',
     'row_conv',
     'multiplex',
+    'layer_norm',
 ]
 
 
@@ -1563,6 +1564,54 @@ def batch_norm(input,
                "is_test": is_test})
 
     return helper.append_activation(batch_norm_out)
+
+
+def layer_norm(input,
+               begin_norm_axis=1,
+               epsilon=1e-05,
+               param_attr=None,
+               bias_attr=None,
+               name=None):
+    """
+    Layer normalization.
+    """
+    helper = LayerHelper('layer_norm', **locals())
+    dtype = helper.input_dtype()
+
+    input_shape = input.shape
+
+    param_shape = [reduce(lambda x, y: x * y, input_shape[begin_norm_axis:])]
+
+    # create parameter
+    scale = helper.create_parameter(
+        attr=helper.param_attr,
+        shape=param_shape,
+        dtype=dtype,
+        default_initializer=Constant(1.0))
+
+    bias = helper.create_parameter(
+        attr=helper.bias_attr, shape=param_shape, dtype=dtype, is_bias=True)
+
+    # create output
+    mean_out = helper.create_tmp_variable(dtype=dtype, stop_gradient=True)
+    variance_out = helper.create_tmp_variable(dtype=dtype, stop_gradient=True)
+
+    layer_norm_out = helper.create_tmp_variable(dtype)
+
+    helper.append_op(
+        type="layer_norm",
+        inputs={"X": input,
+                "Scale": scale,
+                "Bias": bias},
+        outputs={
+            "Y": layer_norm_out,
+            "Mean": mean_out,
+            "Variance": variance_out,
+        },
+        attrs={"epsilon": epsilon,
+               "begin_norm_axis": begin_norm_axis})
+
+    return helper.append_activation(layer_norm_out)
 
 
 def beam_search_decode(ids, scores, name=None):

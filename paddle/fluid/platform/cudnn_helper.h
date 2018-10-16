@@ -221,6 +221,16 @@ class ScopedTensorDescriptor {
                       groups);
   }
 
+  template <typename T>
+  inline cudnnTensorDescriptor_t descriptor(const cudnnTensorFormat_t format,
+                                            const cudnnDataType_t type,
+                                            const int n, const int c,
+                                            const int h, const int w) {
+    PADDLE_ENFORCE(
+        dynload::cudnnSetTensor4dDescriptor(desc_, format, type, n, c, h, w));
+    return desc_;
+  }
+
  private:
   cudnnTensorDescriptor_t desc_;
   DISABLE_COPY_AND_ASSIGN(ScopedTensorDescriptor);
@@ -339,6 +349,29 @@ class ScopedPoolingDescriptor {
  private:
   cudnnPoolingDescriptor_t desc_;
   DISABLE_COPY_AND_ASSIGN(ScopedPoolingDescriptor);
+};
+
+class ScopedDropoutDescriptor {
+ public:
+  ScopedDropoutDescriptor() {
+    PADDLE_ENFORCE(dynload::cudnnCreateDropoutDescriptor(&desc_));
+  }
+  ~ScopedDropoutDescriptor() {
+    PADDLE_ENFORCE(dynload::cudnnDestroyDropoutDescriptor(desc_));
+  }
+
+  inline cudnnDropoutDescriptor_t descriptor(cudnnHandle_t handle,
+                                             float dropout, void* states,
+                                             size_t states_size,
+                                             uint64_t seed) {
+    PADDLE_ENFORCE(dynload::cudnnSetDropoutDescriptor(
+        desc_, handle, dropout, states, states_size, seed));
+    return desc_;
+  }
+
+ private:
+  cudnnDropoutDescriptor_t desc_;
+  DISABLE_COPY_AND_ASSIGN(ScopedDropoutDescriptor);
 };
 
 inline bool CanCUDNNBeUsed(const framework::ExecutionContext& ctx) {

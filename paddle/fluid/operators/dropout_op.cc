@@ -33,6 +33,28 @@ class DropoutOp : public framework::OperatorWithKernel {
     }
     ctx->ShareLoD("X", /*->*/ "Out");
   }
+
+ protected:
+  framework::OpKernelType GetExpectedKernelType(
+      const framework::ExecutionContext& ctx) const override {
+    // choose cudnn kernel if the runtime supported.
+    bool use_cudnn = ctx.Attr<bool>("use_cudnn");
+    bool runtime_cudnn_support = false;
+#ifdef PADDLE_WITH_CUDA
+    if (platform::is_gpu_place(ctx.GetPlace())) {
+      auto& dev_ctx =
+          ctx.template device_context<platform::CUDADeviceContext>();
+      runtime_cudnn_support = dev_ctx.cudnn_handle() != nullptr ? true : false;
+    }
+#endif
+    framework::LibraryType library_ = framework::LibraryType::kPlain;
+    if (use_cudnn && runtime_cudnn_support) {
+      library_ = framework::LibraryType::kCUDNN;
+    }
+    return framework::OpKernelType(
+        framework::ToDataType(ctx.Input<Tensor>("X")->type()), ctx.GetPlace(),
+        framework::StringToDataLayout("AnyLayout"), library_);
+  }
 };
 
 class DropoutOpMaker : public framework::OpProtoAndCheckerMaker {
@@ -57,6 +79,7 @@ class DropoutOpMaker : public framework::OpProtoAndCheckerMaker {
                   "will be dropped.")
         .SetDefault(false);
     AddAttr<int>("seed", "Dropout random seed.").SetDefault(0);
+    AddAttr<bool>("use_cudnn", "True if use cudnn").SetDefault(false);
 
     AddComment(R"DOC(
 Dropout Operator.

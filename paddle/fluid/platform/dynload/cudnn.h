@@ -90,6 +90,9 @@ extern void EnforceCUDNNLoaded(const char* fn_name);
   __macro(cudnnSetConvolutionNdDescriptor);         \
   __macro(cudnnGetConvolutionNdDescriptor);         \
   __macro(cudnnDeriveBNTensorDescriptor);           \
+  __macro(cudnnCreateDropoutDescriptor);            \
+  __macro(cudnnDestroyDropoutDescriptor);           \
+  __macro(cudnnSetDropoutDescriptor);               \
   __macro(cudnnCreate);                             \
   __macro(cudnnDestroy);                            \
   __macro(cudnnSetStream);                          \
@@ -102,6 +105,10 @@ extern void EnforceCUDNNLoaded(const char* fn_name);
   __macro(cudnnPoolingBackward);                    \
   __macro(cudnnSoftmaxBackward);                    \
   __macro(cudnnSoftmaxForward);                     \
+  __macro(cudnnDropoutForward);                     \
+  __macro(cudnnDropoutBackward);                    \
+  __macro(cudnnDropoutGetReserveSpaceSize);         \
+  __macro(cudnnDropoutGetStatesSize);               \
   __macro(cudnnGetVersion);                         \
   __macro(cudnnGetErrorString);
 CUDNN_DNN_ROUTINE_EACH(DECLARE_DYNAMIC_LOAD_CUDNN_WRAP)

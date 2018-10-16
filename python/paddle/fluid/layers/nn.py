@@ -951,7 +951,12 @@ def cos_sim(X, Y):
     return out
 
 
-def dropout(x, dropout_prob, is_test=False, seed=None, name=None):
+def dropout(x,
+            dropout_prob,
+            is_test=False,
+            seed=None,
+            use_cudnn=False,
+            name=None):
     """
     Computes dropout.
 
@@ -969,6 +974,8 @@ def dropout(x, dropout_prob, is_test=False, seed=None, name=None):
                     parameter is set to None, a random seed is used.
                     NOTE: If an integer seed is given, always the same output
                     units will be dropped. DO NOT use a fixed seed in training.
+        use_cudnn (bool): Use cudnn kernel or not, it is valid only when the \
+                    cudnn library is installed. Default: False
         name (str|None): A name for this layer(optional). If set None, the layer
                          will be named automatically.
 
@@ -999,7 +1006,8 @@ def dropout(x, dropout_prob, is_test=False, seed=None, name=None):
             'dropout_prob': dropout_prob,
             'is_test': is_test,
             'fix_seed': seed is not None,
-            'seed': seed if seed is not None else 0
+            'seed': seed if seed is not None else 0,
+            'use_cudnn': use_cudnn
         })
     return out
 

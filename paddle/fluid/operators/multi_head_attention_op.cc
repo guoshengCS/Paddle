@@ -12,161 +12,116 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include <algorithm>
-#include <utility>
-#include <vector>
-#include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/math/blas.h"
-#include "paddle/fluid/operators/math/math_function.h"
-#include "paddle/fluid/operators/math/softmax.h"
-#include "paddle/fluid/platform/for_range.h"
+#include "paddle/fluid/operators/multi_head_attention_op.h"
 
 namespace paddle {
 namespace operators {
-
-template <typename DeviceContext, typename T>
-struct DropoutFunctor {
-  inline DropoutFunctor(const T *in, T *out, bool is_test, int seed)
-      : in_(in), out_(out), is_test_(is_test), seed_(seed) {}
-
-  HOSTDEVICE inline T operator()(int64_t idx) const {}
-
-  const T *in_;
-  T *out_;
-  bool is_test_;
-  int seed_;
-};
-
-template <typename T>
-struct ScaleFunctor {
-  inline ScaleFunctor(const T *in, T *out, T scale)
-      : in_(in), out_(out), scale_(scale) {}
-
-  HOSTDEVICE inline T operator()(int64_t idx) const {}
-
-  const T *in_;
-  T *out_;
-  T scale_;
-};
-
-template <typename DeviceContext, typename T>
-class MultiHeadAttentionKernel : public framework::OpKernel<T> {
- public:
-  void Compute(const framework::ExecutionContext &context) const override {
-    auto &dev_ctx = context.template device_context<DeviceContext>();
-
-    auto *q = context.Input<framework::Tensor>("Q");
-    auto *k = context.Input<framework::Tensor>("K");
-    auto *v = context.Input<framework::Tensor>("V");
-    auto *weight_q = context.Input<framework::Tensor>("Weight_Q");
-    auto *weight_k = context.Input<framework::Tensor>("Weight_K");
-    auto *weight_v = context.Input<framework::Tensor>("Weight_V");
-    auto *cache_k = context.Input<framework::Tensor>("Cache_K");
-    auto *cache_v = context.Input<framework::Tensor>("Cache_V");
-    auto *attn_bias = context.Input<framework::Tensor>("Attn_Bias");
-    auto *attn_weight = context.Output<framework::Tensor>("Attn_weight");
-    auto *proj_q = context.Output<framework::Tensor>("Proj_Q");
-    auto *proj_k = context.Output<framework::Tensor>("Proj_K");
-    auto *proj_v = context.Output<framework::Tensor>("Proj_V");
-    auto *out = context.Output<framework::Tensor>("Out");
-    out->mutable_data<T>(context.GetPlace());
-
-    auto dropout_prob = context.Attr<float>("dropout_prob");
-    auto is_test = context.Attr<bool>("is_test");
-    auto fix_seed = context.Attr<bool>("fix_seed");
-    auto seed = context.Attr<int>("seed");
-    auto n_head = context.Attr<int>("n_head");
-
-    T d_key = w_k->dims()[1] / n_head;
-    T scale = 1 / sqrt(d_key);
-    // auto z_dim = z->dims();
-    // if (z_dim.size() != 2) {
-    //   z->Resize({x_matrix.dims()[0], y_matrix.dims()[1]});
-    // }
-    auto = math::MatrixDescriptor();
-    auto blas = math::GetBlas<DeviceContext, T>(context);
-    // compute_qkv
-    auto mat_dim_q = math::CreateMatrixDescriptor(
-        q->dims(), /* num_flatten_cols */ 2, /* trans */ false);
-    auto mat_dim_w_q = math::CreateMatrixDescriptor(
-        w_q->dims(), /* num_flatten_cols */ 0, /* trans */ false);
-    auto mat_dim_k = math::CreateMatrixDescriptor(
-        k->dims(), /* num_flatten_cols */ 2, /* trans */ false);
-    auto mat_dim_w_k = math::CreateMatrixDescriptor(
-        w_k->dims(), /* num_flatten_cols */ 0, /* trans */ false);
-    auto mat_dim_v = math::CreateMatrixDescriptor(
-        k->dims(), /* num_flatten_cols */ 2, /* trans */ false);
-    auto mat_dim_w_v = math::CreateMatrixDescriptor(
-        w_k->dims(), /* num_flatten_cols */ 0, /* trans */ false);
-    blas.MatMul(*q, mat_dim_q, *weight_q, mat_dim, scale, proj_q, T(0));
-    blas.MatMul(*k, mat_dim, *weight_k, mat_dim, T(1), proj_k, T(0));
-    blas.MatMul(*v, mat_dim, *weight_v, mat_dim, T(1), proj_v, T(0));
-    // split_heads
-
-    math::Transpose<DeviceContext, T, 4> trans;
-    std::vector<int> axis{0, 2, 1, 3};
-    trans(dev_ctx, *proj_q, proj_q, axis);
-    trans(dev_ctx, *proj_k, proj_k, axis);
-    trans(dev_ctx, *proj_v, proj_v, axis);
-
-    // dot_product_attention
-    TensorCopy(*attn_bias, context.GetPlace(), attn_weight);
-    blas.MatMul(*q_out, mat_dim_q, *k_out, mat_dim, T(1), attn_weight, T(1));
-    if (std::is_same<DeviceContext, platform::CPUDeviceContext>::value) {
-      math::SoftmaxFunctor<DeviceContext, T>()(
-          context.template device_context<DeviceContext>(), &X_2d, &Out_2d);
-    } else {
-      math::SoftmaxCUDNNFunctor<T>()(
-          context.template device_context<platform::CUDADeviceContext>(),
-          &flattened_x, &flattened_out);
-    }
-    platform::ForRange<DeviceContext> for_range(dev_ctx, attn_weight->numel());
-    if (is_test) {
-      for_range(ScaleFunctor());
-    } else {
-      for_range(DropoutFunctor());
-    }
-    blas.MatMul(*q_out, mat_dim_q, *k_out, mat_dim, T(1), attn_weight, T(1));
-    // combine_heads
-    trans(dev_ctx, *proj_q, proj_q, axis);
-    // linear projection
-    blas.MatMul(*v, mat_dim, *w_v, mat_dim, scale, out, T(0));
-  }
-};
-
-template <typename DeviceContext, typename T>
-class MultiHeadAttentionGradKernel : public framework::OpKernel<T> {
- public:
-  void Compute(const framework::ExecutionContext &context) const override {}
-};
 
 class MultiHeadAttentionOp : public framework::OperatorWithKernel {
  public:
   using framework::OperatorWithKernel::OperatorWithKernel;
 
  protected:
-  void InferShape(framework::InferShapeContext *context) const override {}
+  void InferShape(framework::InferShapeContext *context) const override {
+    PADDLE_ENFORCE(context->HasInput("Q"),
+                   "Input(Q) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(context->HasInput("K"),
+                   "Input(K) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(context->HasInput("V"),
+                   "Input(V) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasInput("Weight_Q"),
+        "Input(Weight_Q) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasInput("Weight_K"),
+        "Input(Weight_K) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasInput("Weight_V"),
+        "Input(Weight_V) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasInput("Weight_Out"),
+        "Input(Weight_Out) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasOutput("Proj_Q"),
+        "Output(Proj_Q) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasOutput("Proj_K"),
+        "Output(Proj_K) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasOutput("Proj_V"),
+        "Output(Proj_V) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasOutput("Dot_Product"),
+        "Output(Dot_Product) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasOutput("Attn_Weight"),
+        "Output(Attn_Weight) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(context->HasOutput("Mask"),
+                   "Output(Mask) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(
+        context->HasOutput("Attn_Context"),
+        "Output(Attn_Context) of MultiHeadAttentionOp should not be null.");
+    PADDLE_ENFORCE(context->HasOutput("Out"),
+                   "Output(Out) of MultiHeadAttentionOp should not be null.");
+    auto dim_q = context->GetInputDim("Q");
+    auto dim_k = context->GetInputDim("K");
+    auto dim_v = context->GetInputDim("V");
+    auto dim_weight_k = context->GetInputDim("Weight_K");
+    auto dim_weight_v = context->GetInputDim("Weight_V");
+    auto batch_size = dim_q[0];
+    auto src_seq_len = dim_q[1];
+    auto trg_seq_len = dim_k[1];
+    auto d_model = dim_q[2];
+    auto n_head = context->Attrs().Get<int>("n_head");
+    // auto d_key = dim_weight_k[1] / n_head;
+    // auto d_value = dim_weight_v[1] / n_head;
+    context->SetOutputDim("Proj_Q", {batch_size, src_seq_len, dim_weight_k[1]});
+    context->SetOutputDim("Proj_K", {batch_size, trg_seq_len, dim_weight_k[1]});
+    context->SetOutputDim("Proj_V", {batch_size, trg_seq_len, dim_weight_v[1]});
+    if (context->HasInput("Cache_K") && context->HasInput("Cache_V")) {
+      auto dim_cacke_k = context->GetInputDim("Cache_K");
+      trg_seq_len += dim_cacke_k[1];
+      context->SetOutputDim("Cache_K",
+                            {batch_size, trg_seq_len, dim_weight_k[1]});
+      context->SetOutputDim("Cache_V",
+                            {batch_size, trg_seq_len, dim_weight_v[1]});
+    }
+    context->SetOutputDim("Dot_Product",
+                          {batch_size, n_head, src_seq_len, trg_seq_len});
+    context->SetOutputDim("Attn_Weight",
+                          {batch_size, n_head, src_seq_len, trg_seq_len});
+    context->SetOutputDim("Mask",
+                          {batch_size, n_head, src_seq_len, trg_seq_len});
+    context->SetOutputDim("Attn_Context",
+                          {batch_size, src_seq_len, dim_weight_v[1]});
+    context->SetOutputDim("Out", {batch_size, src_seq_len, d_model});
+  }
 };
 
 class MultiHeadAttentionOpMaker : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
     AddInput("Q", "The first input of MatMul op");
-    AddInput("K", "The second input of MatMul op").AsDispensable();
-    AddInput("V", "The second input of MatMul op").AsDispensable();
+    AddInput("K", "The second input of MatMul op");
+    AddInput("V", "The second input of MatMul op");
     AddInput("Weight_Q", "The first input of MatMul op");
     AddInput("Weight_K", "The first input of MatMul op");
     AddInput("Weight_V", "The first input of MatMul op");
-    AddInput("Weight_Out", "The first input of MatMul op");
-    AddInput("Attn_bias", "The second input of MatMul op").AsDispensable();
-    AddInput("Cache_K", "The second input of MatMul op").AsDispensable();
-    AddInput("Cache_V", "The second input of MatMul op").AsDispensable();
-    AddOutput("Mask", "The random sampled dropout mask.").AsIntermediate();
-    AddOutput("Attn_Weight", "The output of MatMul op").AsIntermediate();
     AddOutput("Proj_Q", "The output of MatMul op").AsIntermediate();
     AddOutput("Proj_K", "The output of MatMul op").AsIntermediate();
     AddOutput("Proj_V", "The output of MatMul op").AsIntermediate();
+    AddInput("Cache_K", "The second input of MatMul op").AsDispensable();
+    AddInput("Cache_V", "The second input of MatMul op").AsDispensable();
+    AddOutput("Concat_K", "The second input of MatMul op");
+    AddOutput("Concat_V", "The second input of MatMul op");
+    AddOutput("Dot_Product", "The output of MatMul op").AsIntermediate();
+    AddInput("Attn_Bias", "The second input of MatMul op").AsDispensable();
+    AddOutput("Attn_Weight", "The output of MatMul op").AsIntermediate();
+    AddOutput("Mask", "The random sampled dropout mask.").AsIntermediate();
+    AddOutput("Attn_Context", "The output of MatMul op").AsIntermediate();
+    AddInput("Weight_Out", "The first input of MatMul op");
     AddOutput("Out", "The output of MatMul op");
+    AddAttr<float>("scale", "Probability of setting units to zero.");
     AddAttr<int>("n_head",
                  R"DOC(If true, use the transpose of `X`.
         )DOC");
@@ -186,10 +141,7 @@ class MultiHeadAttentionOpMaker : public framework::OpProtoAndCheckerMaker {
         .SetDefault(false);
     AddAttr<int>("seed", "Dropout random seed.").SetDefault(0);
     AddComment(R"DOC(
-MatMul Operator.
-
-This operator is used to perform (batched) matrix multiplication
-over the last two dimensions of the input tensors `X` and `Y`.
+MultiHeadAttention Operator.
 
 )DOC");
   }
@@ -221,16 +173,3 @@ REGISTER_OP_CPU_KERNEL(
                                       float>,
     ops::MultiHeadAttentionGradKernel<paddle::platform::CPUDeviceContext,
                                       double>);
-
-#ifdef PADDLE_WITH_CUDA
-REGISTER_OP_CUDA_KERNEL(
-    multi_head_attention,
-    ops::MultiHeadAttentionKernel<paddle::platform::CUDADeviceContext, float>,
-    ops::MultiHeadAttentionKernel<paddle::platform::CUDADeviceContext, double>);
-REGISTER_OP_CUDA_KERNEL(
-    multi_head_attention_grad,
-    ops::MultiHeadAttentionGradKernel<paddle::platform::CUDADeviceContext,
-                                      float>,
-    ops::MultiHeadAttentionGradKernel<paddle::platform::CUDADeviceContext,
-                                      double>);
-#endif

@@ -157,6 +157,7 @@ __all__ = [
     'sequence_reverse',
     'affine_channel',
     'hash',
+    'multi_head_attention',
 ]
 
 
@@ -7580,3 +7581,114 @@ def hash(input, hash_size, num_hash=1, name=None):
         attrs={'num_hash': num_hash,
                'mod_by': hash_size})
     return out
+
+
+def multi_head_attention(query,
+                         key,
+                         value,
+                         n_head,
+                         d_key,
+                         d_value,
+                         d_model=None,
+                         scale=None,
+                         cache_k=None,
+                         cache_v=None,
+                         attn_bias=None,
+                         dropout_prob=0.,
+                         seed=None,
+                         is_test=False,
+                         name=None):
+    """
+    Applies a separate affine transformation to each channel of the input.
+    Useful for replacing spatial batch norm with its equivalent fixed
+    transformation. The input also can be 2D tensor and applies a affine
+    transformation in second dimension.
+
+    Args:
+        x (Variable): Feature map input can be a 4D tensor with order NCHW
+            or NHWC. It also can be a 2D tensor and the affine transformation
+            is applied in the second dimension.
+        scale (Variable): 1D input of shape (C), the c-th element is the scale
+            factor of the affine transformation for the c-th channel of
+            the input.
+        bias (Variable): 1D input of shape (C), the c-th element is the bias
+            of the affine transformation for the c-th channel of the input.
+        data_layout (string, default NCHW): NCHW or NHWC. If input is 2D
+            tensor, you can ignore data_layout.
+        name (str, default None): The name of this layer.
+
+    Returns:
+        out (Variable): A tensor of the same shape and data layout with x.
+    """
+    helper = LayerHelper("multi_head_attention", **locals())
+    key = query if key is None else key
+    value = key if value is None else value
+    dtype = query.dtype
+    d_model = query.shape[-1]
+    weight_q = helper.create_parameter(
+        attr=helper.param_attr,
+        shape=[query.shape[-1], n_head * d_key],
+        dtype=dtype)
+    weight_k = helper.create_parameter(
+        attr=helper.param_attr,
+        shape=[key.shape[-1], n_head * d_key],
+        dtype=dtype)
+    weight_v = helper.create_parameter(
+        attr=helper.param_attr,
+        shape=[value.shape[-1], n_head * d_value],
+        dtype=dtype)
+    weight_out = helper.create_parameter(
+        attr=helper.param_attr, shape=[n_head * d_value, d_model], dtype=dtype)
+    inputs = {
+        "Q": query,
+        "K": key,
+        "V": value,
+        "Weight_Q": weight_q,
+        "Weight_K": weight_k,
+        "Weight_V": weight_v,
+        "Weight_Out": weight_out
+    }
+    if attn_bias:
+        inputs["Attn_Bias"] = attn_bias
+        attn_bias.stop_gradient = True
+    if cache_k:
+        assert cache_v is not None and cache_k.shape == cache_v.shape
+        inputs["Cache_K"] = cache_k
+        inputs["Cache_V"] = cache_v
+
+    proj_q = helper.create_variable_for_type_inference(dtype=dtype)
+    proj_k = helper.create_variable_for_type_inference(dtype=dtype)
+    proj_v = helper.create_variable_for_type_inference(dtype=dtype)
+    concat_k = helper.create_variable_for_type_inference(dtype=dtype)
+    concat_v = helper.create_variable_for_type_inference(dtype=dtype)
+    dot_product = helper.create_variable_for_type_inference(dtype=dtype)
+    attn_weight = helper.create_variable_for_type_inference(dtype=dtype)
+    mask = helper.create_variable_for_type_inference(dtype=np.uint8)
+    attn_context = helper.create_variable_for_type_inference(dtype=dtype)
+    out = helper.create_variable_for_type_inference(dtype=dtype)
+    outputs = {
+        "Proj_Q": proj_q,
+        "Proj_K": proj_k,
+        "Proj_V": proj_v,
+        "Concat_K": concat_k,
+        "Concat_V": concat_v,
+        "Dot_Product": dot_product,
+        "Attn_Weight": attn_weight,
+        "Mask": mask,
+        "Attn_Context": attn_context,
+        "Out": out
+    }
+
+    helper.append_op(
+        type="multi_head_attention",
+        inputs=inputs,
+        attrs={
+            "n_head": n_head,
+            "scale": scale if scale is not None else d_key**-0.5,
+            "dropout_prob": dropout_prob,
+            "is_test": is_test,
+            "fix_seed": seed is not None,
+            "seed": seed if seed is not None else 0
+        },
+        outputs=outputs)
+    return out, attn_weight, concat_k, concat_v

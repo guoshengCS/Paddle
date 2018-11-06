@@ -173,12 +173,12 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
 
     // compute_qkv
     framework::Tensor proj_q_tmp, proj_k_tmp, proj_v_tmp;
-    proj_q_tmp.mutable_data({batch_size, src_seq_len, n_head, d_key},
-                            context.GetPlace());
-    proj_k_tmp.mutable_data({batch_size, trg_seq_len, n_head, d_key},
-                            context.GetPlace());
-    proj_v_tmp.mutable_data({batch_size, trg_seq_len, n_head, d_value},
-                            context.GetPlace());
+    proj_q_tmp.mutable_data<T>({batch_size, src_seq_len, n_head, d_key},
+                               context.GetPlace());
+    proj_k_tmp.mutable_data<T>({batch_size, trg_seq_len, n_head, d_key},
+                               context.GetPlace());
+    proj_v_tmp.mutable_data<T>({batch_size, trg_seq_len, n_head, d_value},
+                               context.GetPlace());
     auto blas = math::GetBlas<DeviceContext, T>(context);
     auto mat_dim_q = math::CreateMatrixDescriptor(
         q->dims(), /* num_flatten_cols */ 2, /* trans */ false);
@@ -264,8 +264,8 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
       }
     }
     framework::Tensor attn_context_tmp;
-    attn_context_tmp.mutable_data({batch_size, n_head, src_seq_len, d_value},
-                                  context.GetPlace());
+    attn_context_tmp.mutable_data<T>({batch_size, n_head, src_seq_len, d_value},
+                                     context.GetPlace());
     auto mat_dim_attn_weight = math::CreateMatrixDescriptor(
         attn_context_tmp.dims(),
         /* num_flatten_cols */ 0, /* trans */ false);

@@ -7643,7 +7643,7 @@ def multi_head_attention(query,
         "Q": query,
         "K": key,
         "V": value,
-        "Weight_Q": weight_q,
+        "Weight_Q": weight_q,
         "Weight_K": weight_k,
         "Weight_V": weight_v,
         "Weight_Out": weight_out

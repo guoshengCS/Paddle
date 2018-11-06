@@ -57,7 +57,7 @@ struct DropoutFunctor<platform::CPUDeviceContext, T, D> {
 
   HOSTDEVICE inline T operator()(int64_t idx) {
     if (dist_(engine_) < dropout_prob_) {
-      mask_[idx] = static_cast<D>(0);
+      mask_[idx] = static_cast<D>(0);
       out_[idx] = 0;
     } else {
       mask_[idx] = static_cast<D>(1);
@@ -90,7 +90,7 @@ struct DropoutFunctor<platform::CUDADeviceContext, T, D> {
     rng.seed(seed_);
     rng.discard(idx);
     if (dist_(rng) < dropout_prob_) {
-      mask_[idx] = static_cast<D>(0);
+      mask_[idx] = static_cast<D>(0);
       out_[idx] = 0;
     } else {
       mask_[idx] = static_cast<D>(1);
@@ -141,6 +141,9 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
     auto *cache_v = context.Input<framework::Tensor>("Cache_V");
     auto *concat_k = context.Output<framework::Tensor>("Concat_K");
     auto *concat_v = context.Output<framework::Tensor>("Concat_V");
+    // auto *trans_q = context.Output<framework::Tensor>("Trans_Q");
+    // auto *trans_k = context.Output<framework::Tensor>("Trans_K");
+    // auto *trans_v = context.Output<framework::Tensor>("Trans_V");
     auto *dot_product = context.Output<framework::Tensor>("Dot_Product");
     auto *attn_bias = context.Input<framework::Tensor>("Attn_Bias");
     auto *attn_weight = context.Output<framework::Tensor>("Attn_Weight");
@@ -151,12 +154,15 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
     proj_q->mutable_data<T>(context.GetPlace());
     proj_k->mutable_data<T>(context.GetPlace());
     proj_v->mutable_data<T>(context.GetPlace());
+    // trans_q->mutable_data<T>(context.GetPlace());
+    // trans_k->mutable_data<T>(context.GetPlace());
+    // trans_v->mutable_data<T>(context.GetPlace());
     dot_product->mutable_data<T>(context.GetPlace());
     mask->mutable_data<uint8_t>(context.GetPlace());
     attn_context->mutable_data<T>(context.GetPlace());
     out->mutable_data<T>(context.GetPlace());
 
-    auto scale = static_cast<T>(context.Attr<float>("scale"));
+    auto scale = static_cast<T>(context.Attr<float>("scale"));
     auto n_head = context.Attr<int>("n_head");
     auto batch_size = q->dims()[0];
     auto src_seq_len = q->dims()[1];
@@ -166,23 +172,32 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
     auto d_value = weight_v->dims()[1] / n_head;
 
     // compute_qkv
+    framework::Tensor proj_q_tmp, proj_k_tmp, proj_v_tmp;
+    proj_q_tmp.mutable_data({batch_size, src_seq_len, n_head, d_key},
+                            context.GetPlace());
+    proj_k_tmp.mutable_data({batch_size, trg_seq_len, n_head, d_key},
+                            context.GetPlace());
+    proj_v_tmp.mutable_data({batch_size, trg_seq_len, n_head, d_value},
+                            context.GetPlace());
     auto blas = math::GetBlas<DeviceContext, T>(context);
     auto mat_dim_q = math::CreateMatrixDescriptor(
         q->dims(), /* num_flatten_cols */ 2, /* trans */ false);
     auto mat_dim_weight_q = math::CreateMatrixDescriptor(
         weight_q->dims(), /* num_flatten_cols */ 0, /* trans */ false);
-    blas.MatMul(*q, mat_dim_q, *weight_q, mat_dim_weight_q, T(scale), proj_q,
-                T(0));
+    blas.MatMul(*q, mat_dim_q, *weight_q, mat_dim_weight_q, T(scale),
+                &proj_q_tmp, T(0));
     auto mat_dim_k = math::CreateMatrixDescriptor(
         k->dims(), /* num_flatten_cols */ 2, /* trans */ false);
     auto mat_dim_weight_k = math::CreateMatrixDescriptor(
         weight_k->dims(), /* num_flatten_cols */ 0, /* trans */ false);
-    blas.MatMul(*k, mat_dim_k, *weight_k, mat_dim_weight_k, T(1), proj_k, T(0));
+    blas.MatMul(*k, mat_dim_k, *weight_k, mat_dim_weight_k, T(1), &proj_k_tmp,
+                T(0));
     auto mat_dim_v = math::CreateMatrixDescriptor(
         v->dims(), /* num_flatten_cols */ 2, /* trans */ false);
-    auto mat_dim_w_v = math::CreateMatrixDescriptor(
+    auto mat_dim_weight_v = math::CreateMatrixDescriptor(
         weight_v->dims(), /* num_flatten_cols */ 0, /* trans */ false);
-    blas.MatMul(*v, mat_dim_v, *weight_v, mat_dim_w_v, T(1), proj_v, T(0));
+    blas.MatMul(*v, mat_dim_v, *weight_v, mat_dim_weight_v, T(1), &proj_v_tmp,
+                T(0));
 
     if (cache_k && cache_v) {
       // use cache and concat time steps
@@ -190,24 +205,19 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
       concat_k->mutable_data<T>(context.GetPlace());
       concat_v->mutable_data<T>(context.GetPlace());
       paddle::operators::math::ConcatFunctor<DeviceContext, T> concat_functor;
-      concat_functor(dev_ctx, {*proj_k, *cache_k}, 1, concat_k);
-      concat_functor(dev_ctx, {*proj_v, *cache_v}, 1, concat_v);
-      proj_k = concat_k;
-      proj_v = concat_v;
+      concat_functor(dev_ctx, {proj_k_tmp, *cache_k}, 1, concat_k);
+      concat_functor(dev_ctx, {proj_v_tmp, *cache_v}, 1, concat_v);
+    } else {
+      concat_k = &proj_k_tmp;
+      concat_v = &proj_v_tmp;
     }
 
     // split_heads
-    proj_q->Resize({batch_size, src_seq_len, n_head, d_key});
-    proj_k->Resize({batch_size, trg_seq_len, n_head, d_key});
-    proj_v->Resize({batch_size, trg_seq_len, n_head, d_value});
     math::Transpose<DeviceContext, T, 4> trans;
     std::vector<int> axis{0, 2, 1, 3};
-    trans(dev_ctx, *proj_q, proj_q, axis);
-    trans(dev_ctx, *proj_k, proj_k, axis);
-    trans(dev_ctx, *proj_v, proj_v, axis);
-    proj_q->Resize({batch_size, n_head, src_seq_len, d_key});
-    proj_k->Resize({batch_size, n_head, trg_seq_len, d_key});
-    proj_v->Resize({batch_size, n_head, trg_seq_len, d_value});
+    trans(dev_ctx, proj_q_tmp, proj_q, axis);
+    trans(dev_ctx, *concat_k, proj_k, axis);
+    trans(dev_ctx, *concat_v, proj_v, axis);
 
     // dot_product_attention
     auto mat_dim_proj_q = math::CreateMatrixDescriptor(
@@ -222,7 +232,6 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
       blas.MatMul(*proj_q, mat_dim_proj_q, *proj_k, mat_dim_proj_k, T(1),
                   dot_product, T(0));
     }
-    dot_product->Resize({batch_size * n_head * src_seq_len, trg_seq_len});
     if (std::is_same<DeviceContext, platform::CPUDeviceContext>::value) {
       math::SoftmaxFunctor<DeviceContext, T>()(
           context.template device_context<DeviceContext>(), dot_product,
@@ -254,20 +263,23 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
             mask->data<uint8_t>(), dropout_prob, seed));
       }
     }
+    framework::Tensor attn_context_tmp;
+    attn_context_tmp.mutable_data({batch_size, n_head, src_seq_len, d_value},
+                                  context.GetPlace());
     auto mat_dim_attn_weight = math::CreateMatrixDescriptor(
-        attn_weight->dims(), /* num_flatten_cols */ 0, /* trans */ false);
+        attn_context_tmp.dims(),
+        /* num_flatten_cols */ 0, /* trans */ false);
     auto mat_dim_proj_v = math::CreateMatrixDescriptor(
         proj_v->dims(), /* num_flatten_cols */ 0, /* trans */ false);
     blas.MatMul(*attn_weight, mat_dim_attn_weight, *proj_v, mat_dim_proj_v,
-                T(1), attn_context, T(0));
+                T(1), &attn_context_tmp, T(0));
 
     // combine_heads
-    attn_context->Resize({batch_size, n_head, src_seq_len, d_value});
-    trans(dev_ctx, *attn_context, attn_context, axis);
-    attn_context->Resize({batch_size, src_seq_len, n_head * d_value});
+    trans(dev_ctx, attn_context_tmp, attn_context, axis);
 
     auto mat_dim_attn_context = math::CreateMatrixDescriptor(
-        attn_context->dims(), /* num_flatten_cols */ 2, /* trans */ false);
+        {batch_size, src_seq_len, n_head * d_value}, /* num_flatten_cols */ 2,
+        /* trans */ false);
     auto mat_dim_weight_out = math::CreateMatrixDescriptor(
         weight_q->dims(), /* num_flatten_cols */ 0, /* trans */ false);
     // linear projection
@@ -275,10 +287,10 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
                 mat_dim_weight_out, T(1), out, T(0));
 
     // reshape outputs since they have been reshaped for calculations
-    proj_q->Resize({batch_size, src_seq_len, n_head * d_key});
-    proj_k->Resize({batch_size, trg_seq_len, n_head * d_key});
-    proj_v->Resize({batch_size, trg_seq_len, n_head * d_value});
-    dot_product->Resize({batch_size, n_head, src_seq_len, trg_seq_len});
+    // proj_q->Resize({batch_size, src_seq_len, n_head * d_key});
+    // proj_k->Resize({batch_size, trg_seq_len, n_head * d_key});
+    // proj_v->Resize({batch_size, trg_seq_len, n_head * d_value});
+    // dot_product->Resize({batch_size, n_head, src_seq_len, trg_seq_len});
     // attn_weight->Resize({batch_size, n_head, src_seq_len, trg_seq_len});
     // mask->Resize({batch_size, n_head, src_seq_len, trg_seq_len});
     // attn_context->Resize({batch_size, src_seq_len, n_head * d_value});
@@ -289,51 +301,7 @@ class MultiHeadAttentionKernel : public framework::OpKernel<T> {
 template <typename DeviceContext, typename T>
 class MultiHeadAttentionGradKernel : public framework::OpKernel<T> {
  public:
-  void Compute(const framework::ExecutionContext &context) const override {
-    // auto &dev_ctx = context.template device_context<DeviceContext>();
-
-    // auto *q = context.Input<framework::Tensor>("Q");
-    // auto *k = context.Input<framework::Tensor>("K");
-    // auto *v = context.Input<framework::Tensor>("V");
-    // auto *weight_q = context.Input<framework::Tensor>("Weight_Q");
-    // auto *weight_k = context.Input<framework::Tensor>("Weight_K");
-    // auto *weight_v = context.Input<framework::Tensor>("Weight_V");
-    // auto *proj_q = context.Input<framework::Tensor>("Proj_Q");
-    // auto *proj_k = context.Input<framework::Tensor>("Proj_K");
-    // auto *proj_v = context.Input<framework::Tensor>("Proj_V");
-    // auto *cache_k = context.Input<framework::Tensor>("Cache_K");
-    // auto *cache_v = context.Input<framework::Tensor>("Cache_V");
-    // auto *concat_k = context.Input<framework::Tensor>("Concat_K");
-    // auto *concat_v = context.Input<framework::Tensor>("Concat_V");
-    // auto *dot_product = context.Input<framework::Tensor>("Dot_Product");
-    // auto *attn_bias = context.Input<framework::Tensor>("Attn_Bias");
-    // auto *attn_weight = context.Input<framework::Tensor>("Attn_Weight");
-    // auto *mask = context.Input<framework::Tensor>("Mask");
-    // auto *attn_context = context.Input<framework::Tensor>("Attn_Context");
-    // auto *weight_out = context.Input<framework::Tensor>("Weight_Out");
-    // auto *out = context.Input<framework::Tensor>("Out");
-    // auto *dx =
-    // context.Output<framework::Tensor>(framework::GradVarName("X"));
-    // auto *dy =
-    // context.Output<framework::Tensor>(framework::GradVarName("Y"));
-
-    // proj_q->mutable_data<T>(context.GetPlace());
-    // proj_k->mutable_data<T>(context.GetPlace());
-    // proj_v->mutable_data<T>(context.GetPlace());
-    // dot_product->mutable_data<T>(context.GetPlace());
-    // mask->mutable_data<uint8_t>(context.GetPlace());
-    // attn_context->mutable_data<T>(context.GetPlace());
-    // out->mutable_data<T>(context.GetPlace());
-
-    // auto scale = static_cast<T>(context.Attr<float>("scale"));
-    // auto n_head = context.Attr<int>("n_head");
-    // auto batch_size = q->dims()[0];
-    // auto src_seq_len = q->dims()[1];
-    // auto trg_seq_len = k->dims()[1];
-    // auto d_model = q->dims()[2];
-    // auto d_key = weight_k->dims()[1] / n_head;
-    // auto d_value = weight_v->dims()[1] / n_head;
-  }
+  void Compute(const framework::ExecutionContext &context) const override {}
 };
 
 }  // namespace operators
